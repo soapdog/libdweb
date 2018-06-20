@@ -179,6 +179,7 @@
           "read": {
             "description": "If true, the file will be opened for reading",
             "type": "boolean",
+            "default": false,
             "optional": true
           },
           "write": {
