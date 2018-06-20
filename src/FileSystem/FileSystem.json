@@ -212,7 +212,7 @@
             "description":
               "If true, the file will be opened for appending. The default is true, i.e. opening a file for appending. Specify append: `false` to open the file in regular mode.",
             "type": "boolean",
-            "default": true,
+            "default": false,
             "optional": true
           }
         }

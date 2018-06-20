@@ -24,12 +24,8 @@ class RandomAccessFile extends RandomAccess {
     return (name, options) => new RandomAccessFile(volume, name, options)
   }
   static async open(self, mode) {
-    self.file = await browser.FileSystem.open(self.url, {
-      read: true,
-      write: true
-    })
+    self.file = await browser.FileSystem.open(self.url, mode)
 
-    console.log("opened", self)
     return self
   }
   static async delete(self, position, size) {
@@ -54,20 +50,20 @@ class RandomAccessFile extends RandomAccess {
     }
   }
   _open(request) {
-    console.log("_open", request, this)
-    RandomAccessFile.open(this, { read: true, write: true })
+    console.log("_open", this.url, request)
+    RandomAccessFile.open(this, { read: true, write: true, create: true })
       .then(self => request.callback(null, self))
       .catch(error => request.callback(error))
   }
-  // _openReadonly(request) {
-  //   console.log("_openReadonly", request)
-  //   RandomAccessFile.open(this, { read: true })
-  //     .then(self => request.callback(null, self))
-  //     .catch(error => request.callback(error))
-  // }
+  _openReadonly(request) {
+    console.log("_openReadonly", this.url, request)
+    RandomAccessFile.open(this, { read: true })
+      .then(self => request.callback(null, self))
+      .catch(error => request.callback(error))
+  }
   _write(request) {
-    console.log("_write", request, this.file, this.url)
     const { offset, size, data } = request
+    console.log("_write", this.url, offset, size, data, request)
     browser.File.write(this.file, data.buffer, {
       position: offset,
       size
@@ -78,7 +74,7 @@ class RandomAccessFile extends RandomAccess {
   static async read(file, buffer, position, size) {
     const content = await browser.File.read(file, {
       position: position,
-      size: MAX_SIZE < size ? undefined : size
+      size: size //MAX_SIZE < size ? undefined : size
     })
     Buffer.from(content).copy(buffer)
     return buffer
@@ -92,33 +88,33 @@ class RandomAccessFile extends RandomAccess {
     // }
   }
   _read(request) {
-    console.log("_read", request)
     const { offset, size } = request
+    console.log(`_read`, this.url, offset, size, request)
     const buffer = request.data || Buffer.allocUnsafe(size)
     RandomAccessFile.read(this.file, buffer, offset, size)
       .then(data => request.callback(null, data))
       .catch(error => request.callback(error))
   }
   _del(request) {
-    console.log("_del", request)
+    console.log("_del", this.url, request)
     RandomAccessFile.delete(this, request.offset, request.size)
       .then(() => request.callback(null))
       .catch(error => request.callback(null))
   }
   _stat(request) {
-    console.log("_stat", request)
+    console.log("_stat", this.url, request)
     browser.File.stat(this.file)
       .then(stat => request.callback(null, stat))
       .catch(error => request.callback(error))
   }
   _close(request) {
-    console.log("_close", request)
+    console.log("_close", this.url, request)
     browser.File.close(this.file)
       .then(() => request.callback((this.file = null)))
       .catch(error => request.callback(error))
   }
   _destroy(request) {
-    console.log("_destroy", request)
+    console.log("_destroy", this.url, request)
     browser.FileSystem.removeFile(this.fileURL, { ignoreAbsent: true })
       .then(() => request.callback(null))
       .catch(error => request.callback(error))
