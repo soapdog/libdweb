@@ -3,40 +3,82 @@
 const RandomAccess = require("random-access-storage")
 const { Buffer } = require("Buffer")
 
+const RequestType = {
+  open: 0,
+  read: 1,
+  write: 2,
+  delete: 3,
+  stat: 4,
+  close: 5,
+  destroy: 6
+}
+
 class RandomAccessFile extends RandomAccess {
-  constructor(volume, name, options = {}) {
+  constructor(volume, name, options, config) {
     super()
     this.name = name
     this.options = options
+    this.config = config
     this.volume = volume
     this.url = `${volume.url}${name}`
     this.file = null
-    this.writeQueue = []
+    this.workQueue = []
     this.isIdle = true
+    this.debug = !!config.debug
   }
-  static async mount(url = null) {
+  static async mount(config = {}) {
     const volume = await browser.FileSystem.mount({
-      url: url,
+      url: config.url,
       read: true,
       write: true
     })
 
-    return (name, options) => new RandomAccessFile(volume, name, options)
+    return (name, options) =>
+      new RandomAccessFile(volume, name, options, config)
   }
-  static async open(self, mode) {
+  static async open(self, { mode }) {
+    self.debug && console.log(`>> open ${self.url} ${JSON.stringify(mode)}`)
     self.file = await browser.FileSystem.open(self.url, mode)
-
+    self.debug && console.log(`<< open ${self.url} ${JSON.stringify(mode)}`)
     return self
   }
-  static async delete(self, position, size) {
+  static async read(self, { data, offset, size }) {
+    self.debug && console.log(`>> read ${self.url} <${offset}, ${size}>`)
+    const buffer = data || Buffer.allocUnsafe(size)
+    const chunk = await browser.File.read(self.file, {
+      position: offset,
+      size
+    })
+    Buffer.from(chunk).copy(buffer)
+    self.debug &&
+      console.log(`<< read ${self.url} <${offset}, ${size}>`, buffer)
+    return buffer
+  }
+  static async write(self, { data, offset, size }) {
+    self.debug && console.log(`>> write ${self.url} <${offset}, ${size}>`, data)
+    const wrote = await browser.File.write(self.file, data.buffer, {
+      position: offset,
+      size
+    })
+    await browser.File.flush(self.file)
+
+    self.debug &&
+      console.log(`<< write ${wrote} ${self.url} <${offset}, ${size}>`)
+
+    return wrote
+  }
+  static async delete(self, { offset, size }) {
+    this.debug && console.log(`>> delete ${self.url} <${offset}, ${size}>`)
     const stat = await browser.File.stat(self.file)
-    if (position + size < stat.size) {
+    if (offset + size < stat.size) {
       return null
     } else {
       const data =
-        position > 0
-          ? await browser.File.read(file, { position: 0, size: position })
+        offset > 0
+          ? await browser.File.read(self.file, { position: 0, size: offset })
           : null
+
+      await browser.FileSystem.close(self.file)
 
       self.file = await browser.FileSystem.open(self.url, {
         truncate: true,
@@ -45,86 +87,107 @@ class RandomAccessFile extends RandomAccess {
       })
 
       if (data) {
-        await browser.File.write(self.file, data, { position: 0 })
+        await browser.File.write(self.file, data)
       }
+
+      this.debug && console.log(`<< delete ${self.url} <${offset}, ${size}>`)
     }
   }
-  static async read(file, buffer, position, size) {
-    const content = await browser.File.read(file, {
-      position,
-      size
-    })
-    Buffer.from(content).copy(buffer)
-    return buffer
-  }
-  static async write(file, buffer, position, size) {
-    const wrote = await browser.File.write(file, buffer, {
-      position,
-      size
-    })
-    // await browser.File.flush(file)
+  static async stat(self) {
+    self.debug && console.log(`>> stat ${self.url}`)
+    const stat = await browser.File.stat(self.file)
+    self.debug && console.log(`<< stat {size:${stat.size}} ${self.url} `)
 
-    return wrote
+    return stat
   }
-  static async resumeWrites(self) {
-    const { writeQueue } = self
+  static async close(self) {
+    self.debug && console.log(`>> close ${self.url}`)
+    await browser.File.close(self.file)
+    self.file = null
+    self.debug && console.log(`<< close ${self.url}`)
+    return
+  }
+  static async destroy(self) {
+    self.debug && console.log(`>> destroy ${self.url}`)
+    await browser.FileSystem.removeFile(this.url, { ignoreAbsent: true })
+    self.debug && console.log(`<< destroy ${self.url}`)
+  }
+
+  static async awake(self) {
+    const { workQueue } = self
     self.isIdle = false
     let index = 0
-    while (index < writeQueue.length) {
-      const request = writeQueue[index++]
-      const { offset, size, data } = request
-      try {
-        await RandomAccessFile.write(self.file, data.buffer, offset, size)
-        request.callback(null)
-      } catch (error) {
-        request.callback(error)
-      }
+    while (index < workQueue.length) {
+      const request = workQueue[index++]
+      await RandomAccessFile.wait(self, request)
     }
-    writeQueue.length = 0
+    workQueue.length = 0
     self.isIdle = true
   }
-  _open(request) {
-    RandomAccessFile.open(this, { read: true, write: true, create: true })
-      .then(self => request.callback(null, self))
-      .catch(error => request.callback(error))
-  }
-  _openReadonly(request) {
-    RandomAccessFile.open(this, { read: true })
-      .then(self => request.callback(null, self))
-      .catch(error => request.callback(error))
-  }
-  _write(request) {
-    this.writeQueue.push(request)
-    if (this.isIdle) {
-      RandomAccessFile.resumeWrites(this)
+  static schedule(self, request) {
+    self.workQueue.push(request)
+    if (self.isIdle) {
+      RandomAccessFile.awake(self)
     }
   }
+  static perform(self, request) {
+    switch (request.type) {
+      case RequestType.open: {
+        return RandomAccessFile.open(self, request)
+      }
+      case RequestType.read: {
+        return RandomAccessFile.read(self, request)
+      }
+      case RequestType.write: {
+        return RandomAccessFile.write(self, request)
+      }
+      case RequestType.delete: {
+        return RandomAccessFile.delete(self, request)
+      }
+      case RequestType.stat: {
+        return RandomAccessFile.stat(self, request)
+      }
+      case RequestType.close: {
+        return RandomAccessFile.close(self, request)
+      }
+      case RequestType.destroy: {
+        return RandomAccessFile.destory(self, request)
+      }
+    }
+  }
+  static async wait(self, request) {
+    try {
+      const result = await RandomAccessFile.perform(self, request)
+      request.callback(null, result)
+    } catch (error) {
+      request.callback(error)
+    }
+  }
+  _open(request) {
+    request.mode = { read: true, write: true }
+    RandomAccessFile.schedule(this, request)
+  }
+  _openReadonly(request) {
+    request.mode = { read: true }
+    RandomAccessFile.schedule(this, request)
+  }
+  _write(request) {
+    RandomAccessFile.schedule(this, request)
+  }
   _read(request) {
-    const { offset, size } = request
-    const buffer = request.data || Buffer.allocUnsafe(size)
-    RandomAccessFile.read(this.file, buffer, offset, size)
-      .then(data => request.callback(null, data))
-      .catch(error => request.callback(error))
+    RandomAccessFile.schedule(this, request)
   }
   _del(request) {
-    RandomAccessFile.delete(this, request.offset, request.size)
-      .then(() => request.callback(null))
-      .catch(error => request.callback(null))
+    RandomAccessFile.schedule(this, request)
   }
   _stat(request) {
-    browser.File.stat(this.file)
-      .then(stat => request.callback(null, stat))
-      .catch(error => request.callback(error))
+    RandomAccessFile.wait(this, request)
   }
   _close(request) {
-    browser.File.close(this.file)
-      .then(() => request.callback((this.file = null)))
-      .catch(error => request.callback(error))
+    RandomAccess.schedule(this, request)
   }
   _destroy(request) {
-    browser.FileSystem.removeFile(this.url, { ignoreAbsent: true })
-      .then(() => request.callback(null))
-      .catch(error => request.callback(error))
+    RandomAccess.schedule(this, request)
   }
 }
 

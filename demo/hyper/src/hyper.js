@@ -3,8 +3,8 @@
 var hypercore = require("hypercore")
 var RandomAccessFile = require("./random-access-file")
 
-const main = async () => {
-  const volume = await RandomAccessFile.mount()
+const main = async config => {
+  const volume = await RandomAccessFile.mount(config)
   var feed = hypercore(volume, { valueEncoding: "json" })
 
   feed.append({
@@ -33,4 +33,4 @@ const main = async () => {
   })
 }
 
-main()
+main({ debug: true })
