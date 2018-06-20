@@ -33,4 +33,4 @@ const main = async config => {
   })
 }
 
-main({ debug: true })
+main({ debug: false })
