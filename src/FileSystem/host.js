@@ -777,8 +777,8 @@ class HostFileManager /*::implements FileManager*/ {
   }
   async flush(file /*:File*/) /*:Promise<void>*/ {
     try {
-      debug && console.log(">> Host.fluh", file)
-      return OS.File.prototype.flush.call(file)
+      debug && console.log(">> Host.flush", file)
+      return await OS.File.prototype.flush.call(file)
     } catch (error) {
       return IOError.throw(error)
     }
