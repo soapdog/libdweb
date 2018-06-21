@@ -1,5 +1,7 @@
 "use strict"
 
+https://github.com/mozilla/gecko-dev/blob/9c1c7106eef137e3413fd867fc1ddfb1d3f6728c/dom/webidl/IDBDatabase.webidl
+
 const RandomAccess = require("random-access-storage")
 const { Buffer } = require("Buffer")
 
@@ -13,64 +15,61 @@ const RequestType = {
   destroy: 6
 }
 
-class RandomAccessFile extends RandomAccess {
-  constructor(volume, name, options, config) {
-    super()
-    this.name = name
-    this.options = options
-    this.config = config
-    this.volume = volume
-    this.url = `${volume.url}${name}`
-    this.file = null
-    this.workQueue = []
-    this.isIdle = true
-    this.debug = !!config.debug
-  }
-  static async mount(config = {}) {
-    const volume = await browser.FileSystem.mount({
-      url: config.url,
-      read: true,
-      write: true
-    })
-
-    return (name, options) =>
-      new RandomAccessFile(volume, name, options, config)
+class RandomAccessIDBFile extends RandomAccess {
+  static async mount(name, options) {
+    if (!self.IDBMutableFile) {
+      throw Error(`Implementation depends on IDBMutableFile https://developer.mozilla.org/en-US/docs/Web/API/IDBMutableFile`)
+    } else {
+      const indexedDBName = `${options.name}@RandomAccessIDBFile`
+      const version = options.version || 1.0
+      const objectStorageName = `RandomAccessIDBFileObjectStorage`
+      
+      const request = indexedDB.open(indexedDBName, version)
+      request.onupgradeneeded = () => {
+        const db = request.result  
+        if (!db.objectStoreNames.contains(objectStorageName)) {
+          db.createObjectStore(this.objectStorageName)
+        }
+      }
+      const db = await request
+      return new RandomAccessIDBFileVolume(name, version, indexedDBName, objectStorageName, db)
+    }
   }
   static async open(self, { mode }) {
-    self.debug && console.log(`>> open ${self.url} ${JSON.stringify(mode)}`)
-    if (mode.write) {
-      const directory = new URL("./", self.url).href
-      await browser.FileSystem.createDirectory(directory)
-    }
-    self.file = await browser.FileSystem.open(self.url, mode)
+    console.log(`>> open ${self.file} ${JSON.stringify(mode)}`)
+    const mutableFile = await self.volume.db.createMutableFile("random.bin", "binary/random")
+    self.file = await mutableFile.open("readwrite")
     self.debug && console.log(`<< open ${self.url} ${JSON.stringify(mode)}`)
     return self
   }
   static async read(self, { data, offset, size }) {
     self.debug && console.log(`>> read ${self.url} <${offset}, ${size}>`)
     const buffer = data || Buffer.allocUnsafe(size)
-    const chunk = await browser.File.read(self.file, {
-      position: offset,
-      size
-    })
+    self.file.location = offset
+    const chunk = await self.file.readAsArrayBuffer(size)
     Buffer.from(chunk).copy(buffer)
     self.debug &&
-      console.log(`<< read ${self.url} <${offset}, ${size}>`, buffer)
+      console.log(`<< read ${self.file} <${offset}, ${size}>`, buffer)
     return buffer
   }
   static async write(self, { data, offset, size }) {
-    self.debug && console.log(`>> write ${self.url} <${offset}, ${size}>`, data)
-    const wrote = await browser.File.write(self.file, data.buffer, {
-      position: offset,
-      size
-    })
-    await browser.File.flush(self.file)
+    self.debug && console.log(`>> write ${self.file} <${offset}, ${size}>`, data)
+    self.file.location = offset
+    const {byteLength, byteOffset} = data
+    const chunk = byteLength === size
+      ? (byteOffset > 0 ? data.buffer.slice(byteOffset) : data.buffer)
+      : byteLength > size
+      ? data.buffer.slice(byteOffset, byteOffset + size)
+      : (byteOffset > 0 ? data.buffer.slice(byteOffset) : data.buffer)
+    
+    self.file.location = offset
+    await self.file.write(chunk)
 
     self.debug &&
-      console.log(`<< write ${wrote} ${self.url} <${offset}, ${size}>`)
+      console.log(`<< write ${wrote} ${self.file} <${offset}, ${size}>`)
 
     return wrote
-  }
+  }  
   static async delete(self, { offset, size }) {
     this.debug && console.log(`>> delete ${self.url} <${offset}, ${size}>`)
     const stat = await browser.File.stat(self.file)
@@ -192,6 +191,11 @@ class RandomAccessFile extends RandomAccess {
   }
   _destroy(request) {
     RandomAccess.schedule(this, request)
+  }
+  constructor(volume, file, options) {
+    this.volume = volume
+    this.file = file
+    this.options = options
   }
 }
 

@@ -2,9 +2,9 @@
   "name": "hyper",
   "version": "0.0.0",
   "scripts": {
-    "build": "browserify --debug src/hyper.js > hyper.js",
-    "demo":
-      "env MOZ_DISABLE_CONTENT_SANDBOX=1 web-ext run --firefox=nightly --browser-console --url about:debugging"
+    "build:hyperlog": "browserify --debug src/hyperlog.js > hyper.js",
+    "build:hyperdrive": "browserify --debug src/hyperdrive.js > hyper.js",
+    "demo": "env MOZ_DISABLE_CONTENT_SANDBOX=1 web-ext run --firefox=nightly --browser-console --url about:debugging"
   },
   "devDependencies": {
     "browserify": "16.2.2"
